@@ -129,10 +129,24 @@ fn fiat_shamir(seed: &[u8]) -> Scalar {
     }
 }
 
-type Commitments = (ProjectivePoint, ProjectivePoint);
-type ProofResponse = (Scalar, Scalar, Scalar);
+struct ProofCommitment {
+    ca: ProjectivePoint,
+    cb: ProjectivePoint,
+}
 
-fn prove_binary(ck: ProjectivePoint, m: Scalar, r: Scalar) -> (Commitments, Scalar, ProofResponse) {
+struct ProofResponse {
+    f: Scalar,
+    za: Scalar,
+    zb: Scalar,
+}
+
+struct BinaryTranscript {
+    commitment: ProofCommitment,
+    challenge: Scalar,
+    response: ProofResponse,
+}
+
+fn prove_binary(ck: ProjectivePoint, m: Scalar, r: Scalar) -> BinaryTranscript {
     let a = Scalar::random(OsRng);
     let s = Scalar::random(OsRng);
     let t = Scalar::random(OsRng);
@@ -147,28 +161,31 @@ fn prove_binary(ck: ProjectivePoint, m: Scalar, r: Scalar) -> (Commitments, Scal
     let za = r * x + s;
     let zb = r * (x - f) + t;
 
-    let commitments: Commitments = (ca, cb);
-    let response: ProofResponse = (f, za, zb);
-
-    (commitments, x, response)
+    BinaryTranscript {
+        commitment: ProofCommitment { ca, cb },
+        challenge: x,
+        response: ProofResponse { f, za, zb },
+    }
 }
 
-fn verify_binary(
-    ck: ProjectivePoint,
-    c: ProjectivePoint,
-    commitments: Commitments,
-    response: ProofResponse,
-) {
-    let x = fiat_shamir(commitments.0.to_bytes().as_ref());
+fn verify_binary(ck: ProjectivePoint, c: ProjectivePoint, transcript: &BinaryTranscript) {
+    let BinaryTranscript {
+        commitment,
+        challenge,
+        response,
+    } = transcript;
 
-    let lhs_a = c * x + commitments.0;
-    let lhs_b = c * (x - response.0) + commitments.1;
+    let x = fiat_shamir(commitment.ca.to_bytes().as_ref());
+    assert_eq!(x, *challenge);
 
-    let rhs_a = commit(ck, response.0, response.1);
-    let rhs_b = commit(ck, Scalar::ZERO, response.2);
+    let lhs_a = c * x + commitment.ca;
+    let lhs_b = c * (x - response.f) + commitment.cb;
 
-    println!("{}", lhs_a.eq(&rhs_a));
-    println!("{}", lhs_b.eq(&rhs_b));
+    let rhs_a = commit(ck, response.f, response.za);
+    let rhs_b = commit(ck, Scalar::ZERO, response.zb);
+
+    assert!(lhs_a.eq(&rhs_a));
+    assert!(lhs_b.eq(&rhs_b));
 }
 
 fn message_to_scalar(message: &[u8]) -> Scalar {
@@ -196,8 +213,8 @@ fn main() {
     let message = messages[0];
     let commitment = commit(pk, message, secret);
 
-    let (zkp_comm, zkp_chal, zkp_resp) = prove_binary(pk, message, secret);
-    verify_binary(pk, commitment, zkp_comm, zkp_resp);
+    let binary_transcript = prove_binary(pk, message, secret);
+    verify_binary(pk, commitment, &binary_transcript);
 
     let commitments = [
         commitment + commit(pk, messages[0].neg(), Scalar::ZERO),
