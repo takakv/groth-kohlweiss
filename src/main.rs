@@ -1,12 +1,18 @@
 use crypto_bigint::modular::{BoxedMontyForm, ConstMontyForm, MontyForm, MontyParams};
+use crypto_bigint::rand_core::OsRng;
 use crypto_bigint::{Limb, NonZero, Odd, U384, Uint};
+use p384::elliptic_curve::Field;
+use p384::elliptic_curve::group::GroupEncoding;
 use p384::{
-    AffinePoint, EncodedPoint, NistP384, ProjectivePoint, Scalar,
+    AffinePoint, EncodedPoint, FieldBytes, NistP384, ProjectivePoint, Scalar,
     elliptic_curve::{
-        Curve, PrimeField,
+        PrimeField,
         sec1::{FromEncodedPoint, ToEncodedPoint},
     },
 };
+use sha3::Shake128;
+use sha3::digest::{ExtendableOutput, Update};
+use std::io::Read;
 use std::num::NonZeroU128;
 use std::ops::{Add, AddAssign, Div, Mul, MulAssign, Sub};
 
@@ -101,10 +107,101 @@ fn encode_to_point(message: &[u8]) -> ProjectivePoint {
     panic!("could not encode message after {} tries", max_tries);
 }
 
+fn commit(ck: ProjectivePoint, message: Scalar, r: Scalar) -> ProjectivePoint {
+    (ProjectivePoint::GENERATOR * message) + (ck * r)
+}
+
+fn fiat_shamir(seed: &[u8]) -> Scalar {
+    let mut hasher = Shake128::default();
+    hasher.update(seed);
+
+    let mut reader = hasher.finalize_xof();
+    let mut buf = [0u8; 48];
+
+    loop {
+        reader.read_exact(&mut buf).unwrap();
+
+        let Ok(scalar) = Scalar::from_slice(&buf) else {
+            continue;
+        };
+
+        return scalar;
+    }
+}
+
+type Commitments = (ProjectivePoint, ProjectivePoint);
+type ProofResponse = (Scalar, Scalar, Scalar);
+
+fn prove_binary(ck: ProjectivePoint, m: Scalar, r: Scalar) -> (Commitments, Scalar, ProofResponse) {
+    let a = Scalar::random(OsRng);
+    let s = Scalar::random(OsRng);
+    let t = Scalar::random(OsRng);
+
+    let ca = commit(ck, a, s);
+    let cb = commit(ck, a * m, t);
+
+    // TODO: implement strong FS.
+    let x = fiat_shamir(ca.to_bytes().as_ref());
+
+    let f = m * x + a;
+    let za = r * x + s;
+    let zb = r * (x - f) + t;
+
+    let commitments: Commitments = (ca, cb);
+    let response: ProofResponse = (f, za, zb);
+
+    (commitments, x, response)
+}
+
+fn verify_binary(
+    ck: ProjectivePoint,
+    c: ProjectivePoint,
+    commitments: Commitments,
+    response: ProofResponse,
+) {
+    let x = fiat_shamir(commitments.0.to_bytes().as_ref());
+
+    let lhs_a = c * x + commitments.0;
+    let lhs_b = c * (x - response.0) + commitments.1;
+
+    let rhs_a = commit(ck, response.0, response.1);
+    let rhs_b = commit(ck, Scalar::ZERO, response.2);
+
+    println!("{}", lhs_a.eq(&rhs_a));
+    println!("{}", lhs_b.eq(&rhs_b));
+}
+
+fn message_to_scalar(message: &[u8]) -> Scalar {
+    let mut bytes = [0u8; 48];
+    bytes[48 - message.len()..].copy_from_slice(message);
+    Scalar::from_slice(&bytes).unwrap()
+}
+
 fn main() {
     println!("Hello, world!");
 
-    let message = "0000.101";
-    let message_bytes = message.as_bytes();
-    encode_to_point(message_bytes);
+    let messages = [
+        Scalar::ONE,
+        message_to_scalar("0000.102".as_bytes()),
+        message_to_scalar("0000.103".as_bytes()),
+    ];
+
+    // let secret = Scalar::random(OsRng);
+    let secret = U384::from_be_hex(
+        "788C773608952E9757DCF9E5C9BC9C48CB8F1C650AD6AA87C3BFF0E9E631AD1C435365412903FD7183934B8C21D0AB97",
+    );
+    let secret = Scalar::from_slice(&secret.to_be_bytes()).unwrap();
+    let pk = ProjectivePoint::GENERATOR * secret;
+
+    let message = messages[0];
+    let commitment = commit(pk, message, secret);
+
+    let (zkp_comm, zkp_chal, zkp_resp) = prove_binary(pk, message, secret);
+    verify_binary(pk, commitment, zkp_comm, zkp_resp);
+
+    let commitments = [
+        commitment + commit(pk, messages[0].neg(), Scalar::ZERO),
+        commitment + commit(pk, messages[1].neg(), Scalar::ZERO),
+        commitment + commit(pk, messages[2].neg(), Scalar::ZERO),
+    ];
 }

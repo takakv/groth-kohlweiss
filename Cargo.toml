@@ -6,3 +6,4 @@ edition = "2024"
 [dependencies]
 crypto-bigint = { version = "0.6.1", features = ["alloc"] }
 p384 = "0.13.1"
+sha3 = "0.10.8"
