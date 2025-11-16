@@ -1,0 +1,8 @@
+[package]
+name = "groth-kohlweiss"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+crypto-bigint = { version = "0.6.1", features = ["alloc"] }
+p384 = "0.13.1"
