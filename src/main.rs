@@ -194,11 +194,76 @@ fn message_to_scalar(message: &[u8]) -> Scalar {
     Scalar::from_slice(&bytes).unwrap()
 }
 
+fn commit_message_bits(
+    ck: ProjectivePoint,
+    idx: usize,
+    n: usize,
+) -> (Vec<Scalar>, Vec<ProjectivePoint>) {
+    let mut bits = Vec::with_capacity(n);
+    let mut commitments = Vec::with_capacity(n);
+
+    let mut tmp = idx;
+    for i in 0..n {
+        let res = {
+            if (tmp & 0x01) == 1 {
+                Scalar::ONE
+            } else {
+                Scalar::ZERO
+            }
+        };
+        bits.push(res);
+        commitments.push(commit(ck, res, Scalar::ONE));
+        tmp >>= 1;
+    }
+
+    println!("bits {:?}", bits);
+    println!("coms {:?}", commitments);
+    (bits, commitments)
+}
+
+fn compute_linear_convolution(polys: &[[i32; 2]]) -> Vec<i32> {
+    let mut degree = 1;
+
+    let mut poly_left = vec![0; polys.len() + 1];
+    poly_left[0] = polys[0][0];
+    poly_left[1] = polys[0][1];
+
+    let mut convolution_coefficients = vec![0; polys.len() + 1];
+
+    for h in 1..polys.len() {
+        // The degree increases by one since we multiply with linear expressions.
+        degree += 1;
+
+        let poly_right = polys[h];
+        for k in 0..=degree {
+            let mut coefficient = 0;
+            for i in 0..=k {
+                // The first polynomial must have fewer coefficients than the resulting degree.
+                if i >= degree {
+                    break;
+                }
+
+                let j = k - i;
+                // A linear polynomial has exactly two coefficients.
+                if j >= 2 {
+                    continue;
+                }
+                coefficient += poly_left[i] * poly_right[j];
+            }
+            convolution_coefficients[k] = coefficient;
+        }
+        poly_left.copy_from_slice(&convolution_coefficients);
+    }
+
+    convolution_coefficients
+}
+
 fn main() {
     println!("Hello, world!");
 
     let messages = [
-        Scalar::ONE,
+        Scalar::ZERO,
+        message_to_scalar("0000.101".as_bytes()),
         message_to_scalar("0000.102".as_bytes()),
         message_to_scalar("0000.103".as_bytes()),
     ];
@@ -216,9 +281,36 @@ fn main() {
     let binary_transcript = prove_binary(pk, message, secret);
     verify_binary(pk, commitment, &binary_transcript);
 
-    let commitments = [
-        commitment + commit(pk, messages[0].neg(), Scalar::ZERO),
-        commitment + commit(pk, messages[1].neg(), Scalar::ZERO),
-        commitment + commit(pk, messages[2].neg(), Scalar::ZERO),
-    ];
+    let coeffs = [[1, 2], [3, 4], [2, 5], [7, 14]];
+    let conv_coeffs = compute_linear_convolution(&coeffs);
+    println!("coeffs {:?}", conv_coeffs.iter().rev().collect::<Vec<_>>());
+
+    let mut commitments = Vec::with_capacity(messages.len());
+
+    for message in messages {
+        commitments.push(commitment + commit(pk, message.neg(), Scalar::ZERO));
+    }
+
+    let n = 2;
+    let cap = 2 << (n - 1);
+    println!("{}", cap);
+
+    let (bits, index_commitments) = commit_message_bits(pk, 0, n);
+
+    for j in 0..n {
+        let k = j;
+
+        let lj = bits[j];
+
+        let rj = Scalar::random(OsRng);
+        let aj = Scalar::random(OsRng);
+        let sj = Scalar::random(OsRng);
+        let tj = Scalar::random(OsRng);
+        let rho_k = Scalar::random(OsRng);
+
+        let clj = commit(pk, lj, rj);
+        let caj = commit(pk, aj, sj);
+        let cbj = commit(pk, lj * aj, tj);
+        // let cdk = commit()
+    }
 }
