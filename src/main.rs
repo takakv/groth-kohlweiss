@@ -258,6 +258,23 @@ fn compute_linear_convolution(polys: &[[i32; 2]]) -> Vec<i32> {
     convolution_coefficients
 }
 
+fn scale_polynomial(coefficients: &mut [i32], factor: i32, degree: usize) {
+    for i in 0..=degree {
+        coefficients[i] *= factor;
+    }
+}
+
+fn scale_and_raise_polynomial(coefficients: &mut [i32], factor: i32, degree: usize) {
+    let mut carry = 0;
+    for i in 0..=degree {
+        let new_carry = coefficients[i];
+        coefficients[i] *= factor;
+        coefficients[i] += carry;
+        carry = new_carry;
+    }
+    coefficients[degree + 1] = carry;
+}
+
 fn main() {
     println!("Hello, world!");
 
@@ -296,7 +313,7 @@ fn main() {
         commitments.push(commitment + commit(pk, message.neg(), Scalar::ZERO));
     }
 
-    let n = 3;
+    let n = 4;
     let cap = 2 << (n - 1);
     println!("n = {}", n);
     println!("N = {}", cap);
@@ -330,7 +347,7 @@ fn main() {
     }
     println!();
 
-    let fake_a = [1, 2, 3];
+    let a_nums = [2, 3, 4, 5];
 
     let mask_start = 1 << (n - 1);
     for i in 0..cap {
@@ -348,59 +365,23 @@ fn main() {
         polynomial_coefficients[0] = 1;
 
         for j in 0..n {
-            if (i & mask) != 0 {
-                // f_{j,1} = l_j * x + a_j
-                if (l & mask) == 0 {
-                    for idx in 0..polynomial_coefficients.len() {
-                        polynomial_coefficients[idx] *= fake_a[j];
-                    }
-                } else {
-                    let mut preceding_coefficient = 0;
-                    for idx in 0..polynomial_coefficients.len() {
-                        let current_coefficient = polynomial_coefficients[idx];
-                        if current_coefficient == 0 {
-                            polynomial_coefficients[idx] = preceding_coefficient;
-                            // Skip over higher order coefficients, which are all zero.
-                            break;
-                        }
+            let i_j = (i & mask) != 0;
+            let l_j = (l & mask) != 0;
 
-                        polynomial_coefficients[idx] *= fake_a[j];
-                        polynomial_coefficients[idx] += preceding_coefficient;
-                        preceding_coefficient = current_coefficient;
-                    }
-                }
+            let a_j = if i_j { a_nums[j] } else { -a_nums[j] };
+
+            if i_j == l_j {
+                scale_and_raise_polynomial(&mut polynomial_coefficients, a_j, j);
             } else {
-                // f_{j,0} = (1 - l_j)x - a_j
-                if (l & mask) != 0 {
-                    for idx in 0..polynomial_coefficients.len() {
-                        polynomial_coefficients[idx] *= -fake_a[j];
-                    }
-                } else {
-                    let mut preceding_coefficient = 0;
-                    for idx in 0..polynomial_coefficients.len() {
-                        let current_coefficient = polynomial_coefficients[idx];
-                        if current_coefficient == 0 {
-                            polynomial_coefficients[idx] = preceding_coefficient;
-                            // Skip over higher order coefficients, which are all zero.
-                            break;
-                        }
-
-                        polynomial_coefficients[idx] *= -fake_a[j];
-                        polynomial_coefficients[idx] += preceding_coefficient;
-                        preceding_coefficient = current_coefficient;
-                    }
-                }
+                scale_polynomial(&mut polynomial_coefficients, a_j, j);
             }
 
-            let i_j = { if (i & mask) != 0 { 1 } else { 0 } };
-            let l_j = { if (l & mask) != 0 { 1 } else { 0 } };
-
-            i_bits_str.push_str(&format!("{}", i_j));
-            l_bits_str.push_str(&format!("{}", l_j));
+            i_bits_str.push_str(&format!("{}", i32::from(i_j)));
+            l_bits_str.push_str(&format!("{}", i32::from(l_j)));
             mask >>= 1;
 
             let a_j = {
-                if i_j == 1 {
+                if i_j {
                     format!("a_{}", j + 1)
                 } else {
                     format!("-a_{}", j + 1)
