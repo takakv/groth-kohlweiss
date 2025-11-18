@@ -1,6 +1,6 @@
 use crypto_bigint::modular::{BoxedMontyForm, ConstMontyForm, MontyForm, MontyParams};
-use crypto_bigint::rand_core::OsRng;
-use crypto_bigint::{Limb, NonZero, Odd, U384, Uint};
+use crypto_bigint::rand_core::{OsRng, RngCore};
+use crypto_bigint::{Limb, NonZero, Odd, U384, Uint, Zero};
 use p384::elliptic_curve::Field;
 use p384::elliptic_curve::group::GroupEncoding;
 use p384::{
@@ -194,7 +194,7 @@ fn message_to_scalar(message: &[u8]) -> Scalar {
     Scalar::from_slice(&bytes).unwrap()
 }
 
-fn commit_message_bits(
+fn commit_index_bits(
     ck: ProjectivePoint,
     idx: usize,
     n: usize,
@@ -262,10 +262,14 @@ fn main() {
     println!("Hello, world!");
 
     let messages = [
-        Scalar::ZERO,
         message_to_scalar("0000.101".as_bytes()),
         message_to_scalar("0000.102".as_bytes()),
-        message_to_scalar("0000.103".as_bytes()),
+        Scalar::ZERO,
+        message_to_scalar("0000.104".as_bytes()),
+        message_to_scalar("0000.105".as_bytes()),
+        message_to_scalar("0000.106".as_bytes()),
+        message_to_scalar("0000.107".as_bytes()),
+        message_to_scalar("0000.108".as_bytes()),
     ];
 
     // let secret = Scalar::random(OsRng);
@@ -275,7 +279,8 @@ fn main() {
     let secret = Scalar::from_slice(&secret.to_be_bytes()).unwrap();
     let pk = ProjectivePoint::GENERATOR * secret;
 
-    let message = messages[0];
+    let l = 3;
+    let message = messages[l - 1];
     let commitment = commit(pk, message, secret);
 
     let binary_transcript = prove_binary(pk, message, secret);
@@ -291,26 +296,277 @@ fn main() {
         commitments.push(commitment + commit(pk, message.neg(), Scalar::ZERO));
     }
 
-    let n = 2;
+    let n = 3;
     let cap = 2 << (n - 1);
-    println!("{}", cap);
+    println!("n = {}", n);
+    println!("N = {}", cap);
 
-    let (bits, index_commitments) = commit_message_bits(pk, 0, n);
+    let (bits, index_commitments) = commit_index_bits(pk, l, n);
+
+    // COMMITMENT PHASE
+    let mut r = Vec::with_capacity(n);
+    let mut a = Vec::with_capacity(n);
+    let mut s = Vec::with_capacity(n);
+    let mut t = Vec::with_capacity(n);
+    let mut rho = Vec::with_capacity(n);
+
+    let mut c_l = Vec::with_capacity(n);
+    let mut c_a = Vec::with_capacity(n);
+    let mut c_b = Vec::with_capacity(n);
+
+    for _ in 0..n {
+        r.push(Scalar::random(OsRng));
+        a.push(Scalar::random(OsRng));
+        s.push(Scalar::random(OsRng));
+        t.push(Scalar::random(OsRng));
+        rho.push(Scalar::random(OsRng));
+    }
+
+    println!();
+    println!("l = {}", l);
+    print!("l_bits = ");
+    for b in &bits {
+        print!("{},", b.to_canonical().to_limbs()[0])
+    }
+    println!();
+
+    let fake_a = [1, 2, 3];
+
+    let mask_start = 1 << (n - 1);
+    for i in 0..cap {
+        println!("Loop: i = {}", i);
+        let mut mask = mask_start;
+        // j represents the index of the currently considered bit of i.
+        // E.g. i = 4 has the binary representation 100, and so i_j for j = 0,...,2 represents:
+        // i_0 = 1, i_1 = 0, i_2 = 0.
+        let mut i_bits_str = String::new();
+        let mut l_bits_str = String::new();
+        let mut deltas = String::new();
+        let mut poly = String::new();
+
+        let mut polynomial_coefficients = vec![0; n + 1];
+        polynomial_coefficients[0] = 1;
+
+        for j in 0..n {
+            if (i & mask) != 0 {
+                // f_{j,1} = l_j * x + a_j
+                if (l & mask) == 0 {
+                    for idx in 0..polynomial_coefficients.len() {
+                        polynomial_coefficients[idx] *= fake_a[j];
+                    }
+                } else {
+                    let mut preceding_coefficient = 0;
+                    for idx in 0..polynomial_coefficients.len() {
+                        let current_coefficient = polynomial_coefficients[idx];
+                        if current_coefficient == 0 {
+                            polynomial_coefficients[idx] = preceding_coefficient;
+                            // Skip over higher order coefficients, which are all zero.
+                            break;
+                        }
+
+                        polynomial_coefficients[idx] *= fake_a[j];
+                        polynomial_coefficients[idx] += preceding_coefficient;
+                        preceding_coefficient = current_coefficient;
+                    }
+                }
+            } else {
+                // f_{j,0} = (1 - l_j)x - a_j
+                if (l & mask) != 0 {
+                    for idx in 0..polynomial_coefficients.len() {
+                        polynomial_coefficients[idx] *= -fake_a[j];
+                    }
+                } else {
+                    let mut preceding_coefficient = 0;
+                    for idx in 0..polynomial_coefficients.len() {
+                        let current_coefficient = polynomial_coefficients[idx];
+                        if current_coefficient == 0 {
+                            polynomial_coefficients[idx] = preceding_coefficient;
+                            // Skip over higher order coefficients, which are all zero.
+                            break;
+                        }
+
+                        polynomial_coefficients[idx] *= -fake_a[j];
+                        polynomial_coefficients[idx] += preceding_coefficient;
+                        preceding_coefficient = current_coefficient;
+                    }
+                }
+            }
+
+            let i_j = { if (i & mask) != 0 { 1 } else { 0 } };
+            let l_j = { if (l & mask) != 0 { 1 } else { 0 } };
+
+            i_bits_str.push_str(&format!("{}", i_j));
+            l_bits_str.push_str(&format!("{}", l_j));
+            mask >>= 1;
+
+            let a_j = {
+                if i_j == 1 {
+                    format!("a_{}", j + 1)
+                } else {
+                    format!("-a_{}", j + 1)
+                }
+            };
+            let delta = { if i_j == l_j { 1 } else { 0 } };
+            deltas.push_str(&format!("{}", delta));
+
+            // let coefficients = [a_j, &format!("{}", delta)];
+            poly.push_str(&format!("({} + {}x)", a_j, delta));
+        }
+        println!("  polycoeff: {:?}", polynomial_coefficients);
+        println!("  i_bits = {}", i_bits_str);
+        println!("  l_bits = {}", l_bits_str);
+        println!("  deltas = {}", deltas);
+        println!("  product = {}", poly);
+    }
+
+    return;
+
+    //let mut p_i_coefficients = Vec::with_capacity(cap);
+    let mask_start = 1 << (n - 1);
+    for i in 0..cap {
+        println!("Loop: i = {}", i);
+        let mut mask = mask_start;
+        // j represents the index of the currently considered bit of i.
+        // E.g. i = 4 has the binary representation 100, and so i_j for j = 0,...,2 represents:
+        // i_0 = 1, i_1 = 0, i_2 = 0.
+        let mut i_bits_str = String::new();
+        let mut l_bits_str = String::new();
+        let mut deltas = String::new();
+        let mut poly = String::new();
+
+        let mut polynomial_coefficients = vec![Scalar::ZERO; n + 1];
+        polynomial_coefficients[0] = Scalar::ONE;
+
+        for j in 0..n {
+            if (i & mask) != 0 {
+                // f_{j,1} = l_j * x + a_j
+                if (l & mask) == 0 {
+                    for idx in 0..polynomial_coefficients.len() {
+                        polynomial_coefficients[idx] *= a[j];
+                    }
+                } else {
+                    let mut preceding_coefficient = Scalar::ZERO;
+                    for idx in 0..polynomial_coefficients.len() {
+                        let current_coefficient = polynomial_coefficients[idx];
+                        if current_coefficient == Scalar::ZERO {
+                            // Skip over higher order coefficients, which are all zero.
+                            break;
+                        }
+
+                        polynomial_coefficients[idx] *= a[j];
+                        polynomial_coefficients[idx] += preceding_coefficient;
+                        preceding_coefficient = current_coefficient;
+                    }
+                }
+            } else {
+                // f_{j,0} = (1 - l_j)x - a_j
+                if (l & mask) != 0 {
+                    for idx in 0..polynomial_coefficients.len() {
+                        polynomial_coefficients[idx] *= a[j];
+                    }
+                } else {
+                    let mut preceding_coefficient = Scalar::ZERO;
+                    for idx in 0..polynomial_coefficients.len() {
+                        let current_coefficient = polynomial_coefficients[idx];
+                        if current_coefficient == Scalar::ZERO {
+                            // Skip over higher order coefficients, which are all zero.
+                            break;
+                        }
+
+                        polynomial_coefficients[idx] *= -a[j];
+                        polynomial_coefficients[idx] += preceding_coefficient;
+                        preceding_coefficient = current_coefficient;
+                    }
+                }
+            }
+
+            let i_j = { if (i & mask) != 0 { 1 } else { 0 } };
+            let l_j = { if (l & mask) != 0 { 1 } else { 0 } };
+
+            i_bits_str.push_str(&format!("{}", i_j));
+            l_bits_str.push_str(&format!("{}", l_j));
+            mask >>= 1;
+
+            let a_j = {
+                if i_j == 1 {
+                    format!("a_{}", j + 1)
+                } else {
+                    format!("-a_{}", j + 1)
+                }
+            };
+            let delta = { if i_j == l_j { 1 } else { 0 } };
+            deltas.push_str(&format!("{}", delta));
+
+            // let coefficients = [a_j, &format!("{}", delta)];
+            poly.push_str(&format!("({} + {}x)", a_j, delta));
+        }
+        println!("  i_bits = {}", i_bits_str);
+        println!("  l_bits = {}", l_bits_str);
+        println!("  deltas = {}", deltas);
+        println!("  product = {}", poly);
+    }
+
+    println!();
+
+    for j in 1..=n {
+        let k = j - 1;
+
+        let r_j = r[j - 1];
+        let s_j = s[j - 1];
+        let t_j = t[j - 1];
+        let rho_k = rho[k];
+
+        let l_j = bits[j - 1];
+        let a_j = a[j - 1];
+
+        c_l.push(commit(pk, l_j, r_j));
+        c_a.push(commit(pk, a_j, s_j));
+        c_b.push(commit(pk, l_j * a_j, t_j));
+        // let cdk = commit()
+    }
+
+    // CHALLENGE PHASE
+    let mut x_bytes = [0u8; 16];
+    OsRng.fill_bytes(&mut x_bytes);
+
+    let x = message_to_scalar(&x_bytes);
+
+    // RESPONSE PHASE
+    let mut f_values = Vec::with_capacity(n);
+    let mut za_values = Vec::with_capacity(n);
+    let mut zb_values = Vec::with_capacity(n);
+    // let mut zd_values = Vec::with_capacity(n);
 
     for j in 0..n {
-        let k = j;
+        let f_j = bits[j] * x + a[j];
+        let za_j = r[j] * x + s[j];
+        let zb_j = r[j] * (x - f_j) + t[j];
 
-        let lj = bits[j];
+        f_values.push(f_j);
+        za_values.push(za_j);
+        zb_values.push(zb_j);
+    }
 
-        let rj = Scalar::random(OsRng);
-        let aj = Scalar::random(OsRng);
-        let sj = Scalar::random(OsRng);
-        let tj = Scalar::random(OsRng);
-        let rho_k = Scalar::random(OsRng);
+    let mut rho_x_sum = rho[0] * x.pow([0u64]);
+    let mut x_exp = x;
 
-        let clj = commit(pk, lj, rj);
-        let caj = commit(pk, aj, sj);
-        let cbj = commit(pk, lj * aj, tj);
-        // let cdk = commit()
+    for k in 1..n {
+        rho_x_sum.add_assign(rho[k] * x_exp);
+        x_exp.mul_assign(&x);
+    }
+
+    let zd = (secret * x.pow([n as u64])) - rho_x_sum;
+
+    // VERIFICATION PHASE
+    for j in 0..n {
+        let c_l_j = c_l[j];
+
+        let lhs = (c_l_j * x) + c_a[j];
+        let rhs = commit(pk, f_values[j], za_values[j]);
+        println!("check 1 eq {:?}", lhs.eq(&rhs));
+
+        let lhs = (c_l_j * (x - f_values[j])) + c_b[j];
+        let rhs = commit(pk, Scalar::ZERO, zb_values[j]);
+        println!("check 2 eq {:?}", lhs.eq(&rhs));
     }
 }
