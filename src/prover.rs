@@ -1,5 +1,5 @@
 use crypto_bigint::rand_core::RngCore;
-use crypto_bigint::subtle::{ConditionallySelectable, ConstantTimeEq};
+use crypto_bigint::subtle::{Choice, ConditionallySelectable, ConstantTimeEq};
 use p384::elliptic_curve::Field;
 use p384::{ProjectivePoint, Scalar};
 
@@ -53,9 +53,50 @@ fn vector_from_l_bits(l: usize, n: usize) -> Vec<Scalar> {
     l_bits
 }
 
-// NB! This is certainly not constant time, since that would sacrifice clarity.
-// Do not use in production, if timing attacks are a concern!
 fn compute_p_i_coefficients(i: usize, a: &[Scalar], l: usize, initial_mask: usize) -> Vec<Scalar> {
+    let mut mask = initial_mask;
+    let n = a.len();
+
+    let mut coefficients = vec![Scalar::ZERO; n + 1];
+    coefficients[0] = Scalar::ONE;
+
+    // j represents the index of the currently considered bit of i and l.
+    // E.g. i = 4 has the binary representation 100, and so i_j for j = 0,...,2 represents:
+    // i_0 = 1, i_1 = 0, i_2 = 0.
+    // In the paper, bits are 1-indexed, rather than 0-indexed.
+    for j in 0..n {
+        let i_j = (i & mask) != 0;
+        let l_j = (l & mask).ct_ne(&0);
+        mask >>= 1;
+
+        let a_j = if i_j { a[j] } else { -a[j] };
+        let delta = Scalar::conditional_select(
+            &Scalar::ZERO,
+            &Scalar::ONE,
+            l_j.ct_eq(&Choice::from(i_j as u8)),
+        );
+
+        let mut carry = Scalar::ZERO;
+        for i in 0..=j {
+            let new_carry = delta * coefficients[i];
+            coefficients[i] *= a_j;
+            coefficients[i] += carry;
+            carry = new_carry;
+        }
+        coefficients[j + 1] = carry;
+    }
+
+    coefficients
+}
+
+// NB! This is not constant time, but might be easier to reason about and slightly faster.
+#[allow(dead_code)]
+fn compute_p_i_coefficients_vartime(
+    i: usize,
+    a: &[Scalar],
+    l: usize,
+    initial_mask: usize,
+) -> Vec<Scalar> {
     let mut mask = initial_mask;
     let n = a.len();
 
