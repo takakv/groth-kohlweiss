@@ -2,29 +2,10 @@ use crypto_bigint::rand_core::OsRng;
 use p384::elliptic_curve::Field;
 use p384::{ProjectivePoint, Scalar};
 
-mod fiatshamir;
-mod proof;
-mod prover;
-mod verifier;
-
-use crate::proof::Witness;
-use crate::prover::{ni_prove_commitment_to_0, ni_prove_membership};
-use crate::verifier::{verify_commitment_to_0, verify_membership};
-
-fn commit(ck: ProjectivePoint, message: Scalar, r: Scalar) -> ProjectivePoint {
-    (ProjectivePoint::GENERATOR * message) + (ck * r)
-}
-
-fn message_to_scalar(message: &[u8]) -> Scalar {
-    let mut bytes = [0u8; 48];
-    bytes[48 - message.len()..].copy_from_slice(message);
-    Scalar::from_slice(&bytes).unwrap()
-}
-
-struct Parameters {
-    n: usize,
-    cap: usize,
-}
+use groth_kohlweiss::crypto::{commit, message_to_scalar};
+use groth_kohlweiss::proof::{Parameters, Witness};
+use groth_kohlweiss::prover::{ni_prove_commitment_to_0, ni_prove_membership};
+use groth_kohlweiss::verifier::{verify_commitment_to_0, verify_membership};
 
 fn main() {
     let mut messages = vec![
@@ -77,9 +58,9 @@ fn main() {
     commitments[l] = commitment; // NB! variable time
 
     let transcript = if membership_proof {
-        ni_prove_membership(&mut rng, pk, &commitments, &messages, &parameters, witness)
+        ni_prove_membership(&mut rng, pk, &commitments, &messages, &parameters, &witness)
     } else {
-        ni_prove_commitment_to_0(&mut rng, pk, &commitments, &parameters, witness)
+        ni_prove_commitment_to_0(&mut rng, pk, &commitments, &parameters, &witness)
     };
 
     if membership_proof {

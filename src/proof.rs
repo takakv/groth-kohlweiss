@@ -1,8 +1,13 @@
 use p384::{ProjectivePoint, Scalar};
 
-pub(crate) struct Witness {
-    pub(crate) l: usize,
-    pub(crate) r: Scalar,
+pub struct Parameters {
+    pub n: usize,
+    pub cap: usize,
+}
+
+pub struct Witness {
+    pub l: usize,
+    pub r: Scalar,
 }
 
 pub struct ProofCommitment {

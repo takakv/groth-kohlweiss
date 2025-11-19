@@ -1,7 +1,7 @@
 use p384::{ProjectivePoint, Scalar};
 
-use crate::proof::Transcript;
-use crate::{commit, Parameters};
+use crate::crypto::commit;
+use crate::proof::{Parameters, Transcript};
 
 fn compute_f_ji_product(f: &[Scalar], x: Scalar, i: usize, initial_mask: usize) -> Scalar {
     let mut result = Scalar::ONE;
@@ -27,7 +27,7 @@ fn compute_c_d_product(c_d: &[ProjectivePoint], x: Scalar) -> (ProjectivePoint, 
     (result, -x_neg_exp)
 }
 
-fn verify_loop(ck: ProjectivePoint, parameters: &Parameters, transcript: &Transcript) {
+fn verify_loop(ck: ProjectivePoint, parameters: &Parameters, transcript: &Transcript) -> bool {
     let commitments = &transcript.commitments;
     let x = transcript.challenge;
     let response = &transcript.response;
@@ -46,12 +46,18 @@ fn verify_loop(ck: ProjectivePoint, parameters: &Parameters, transcript: &Transc
 
         let lhs = (c_l_j * x) + c_a[j];
         let rhs = commit(ck, f[j], z_a[j]);
-        println!("check 1 eq {:?}", lhs.eq(&rhs));
+        if lhs.ne(&rhs) {
+            return false;
+        }
 
         let lhs = (c_l_j * (x - f[j])) + c_b[j];
         let rhs = commit(ck, Scalar::ZERO, z_b[j]);
-        println!("check 2 eq {:?}", lhs.eq(&rhs));
+        if lhs.ne(&rhs) {
+            return false;
+        }
     }
+
+    true
 }
 
 pub fn verify_commitment_to_0(
@@ -68,7 +74,9 @@ pub fn verify_commitment_to_0(
     let f = &transcript.response.f;
     let z_d = transcript.response.z_d;
 
-    verify_loop(ck, params, transcript);
+    if !verify_loop(ck, params, transcript) {
+        panic!("Proof loop checks failed")
+    }
 
     let (prod_c_d, _) = compute_c_d_product(c_d, x);
     let mut prod_c_i = ProjectivePoint::IDENTITY;
@@ -82,7 +90,9 @@ pub fn verify_commitment_to_0(
     let lhs = prod_c_i + prod_c_d;
     let rhs = commit(ck, Scalar::ZERO, z_d);
 
-    println!("Check final eq {:?}", lhs.eq(&rhs));
+    if lhs.ne(&rhs) {
+        panic!("Proof final check failed")
+    }
 }
 
 pub fn verify_membership(
@@ -100,7 +110,9 @@ pub fn verify_membership(
     let f = &transcript.response.f;
     let z_d = transcript.response.z_d;
 
-    verify_loop(ck, params, transcript);
+    if !verify_loop(ck, params, transcript) {
+        panic!("Proof loop checks failed")
+    }
 
     let (prod_c_d, x_exp_n) = compute_c_d_product(c_d, x);
 
@@ -118,5 +130,7 @@ pub fn verify_membership(
     let lhs = prod_c_i + prod_c_d;
     let rhs = commit(ck, Scalar::ZERO, z_d);
 
-    println!("Check final eq {:?}", lhs.eq(&rhs));
+    if lhs.ne(&rhs) {
+        panic!("Proof final check failed")
+    }
 }

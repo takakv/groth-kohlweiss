@@ -3,7 +3,17 @@ name = "groth-kohlweiss"
 version = "0.1.0"
 edition = "2024"
 
+[lib]
+path = "src/lib.rs"
+
 [dependencies]
 crypto-bigint = { version = "0.6.1", features = ["alloc"] }
 p384 = "0.13.1"
 sha3 = "0.10.8"
+
+[dev-dependencies]
+criterion = "0.7.0"
+
+[[bench]]
+name = "membership_1k"
+harness = false

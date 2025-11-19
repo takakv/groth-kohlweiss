@@ -3,9 +3,9 @@ use crypto_bigint::subtle::{Choice, ConditionallySelectable, ConstantTimeEq};
 use p384::elliptic_curve::Field;
 use p384::{ProjectivePoint, Scalar};
 
+use crate::crypto::commit;
 use crate::fiatshamir::compute_challenge;
-use crate::proof::{ProofCommitment, ProofResponse, Transcript, Witness};
-use crate::{commit, Parameters};
+use crate::proof::{Parameters, ProofCommitment, ProofResponse, Transcript, Witness};
 
 struct ProverScalars {
     r: Vec<Scalar>,
@@ -252,7 +252,7 @@ fn compute_fast_commitments<R: RngCore>(
 fn compute_response(
     params: &Parameters,
     memory: ProverMemory,
-    witness: Witness,
+    witness: &Witness,
     challenge: Scalar,
 ) -> ProofResponse {
     let n = params.n;
@@ -293,7 +293,7 @@ pub fn ni_prove_commitment_to_0<R: RngCore>(
     ck: ProjectivePoint,
     commitments: &[ProjectivePoint],
     params: &Parameters,
-    witness: Witness,
+    witness: &Witness,
 ) -> Transcript {
     let (proof_commitments, memory) =
         compute_full_commitments(rng, ck, &commitments, &params, &witness);
@@ -313,7 +313,7 @@ pub fn ni_prove_membership<R: RngCore>(
     commitments: &[ProjectivePoint],
     values: &[Scalar],
     params: &Parameters,
-    witness: Witness,
+    witness: &Witness,
 ) -> Transcript {
     let (proof_commitments, memory) = compute_fast_commitments(rng, ck, &values, &params, &witness);
     let challenge = compute_challenge(ck, &commitments, &proof_commitments);
