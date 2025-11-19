@@ -1,10 +1,24 @@
 use crypto_bigint::rand_core::RngCore;
+use crypto_bigint::subtle::{ConditionallySelectable, ConstantTimeEq};
 use p384::elliptic_curve::Field;
 use p384::{ProjectivePoint, Scalar};
 
 use crate::fiatshamir::compute_challenge;
 use crate::proof::{ProofCommitment, ProofResponse, Transcript, Witness};
 use crate::{commit, Parameters};
+
+struct ProverScalars {
+    r: Vec<Scalar>,
+    a: Vec<Scalar>,
+    s: Vec<Scalar>,
+    t: Vec<Scalar>,
+    rho: Vec<Scalar>,
+}
+
+struct ProverMemory {
+    scalars: ProverScalars,
+    l: Vec<Scalar>,
+}
 
 fn scale_polynomial(coefficients: &mut [Scalar], factor: Scalar, degree: usize) {
     for i in 0..=degree {
@@ -23,13 +37,68 @@ fn scale_and_raise_polynomial(coefficients: &mut [Scalar], factor: Scalar, degre
     coefficients[degree + 1] = carry;
 }
 
-struct ProverMemory {
-    r: Vec<Scalar>,
-    a: Vec<Scalar>,
-    s: Vec<Scalar>,
-    t: Vec<Scalar>,
-    rho: Vec<Scalar>,
-    l: Vec<Scalar>,
+fn vector_from_l_bits(l: usize, n: usize) -> Vec<Scalar> {
+    let mut l_bits = Vec::with_capacity(n);
+
+    let mut mask = 1 << (n - 1);
+    for _ in 0..n {
+        l_bits.push(Scalar::conditional_select(
+            &Scalar::ONE,
+            &Scalar::ZERO,
+            (l & mask).ct_eq(&0),
+        ));
+        mask >>= 1;
+    }
+
+    l_bits
+}
+
+// NB! This is certainly not constant time, since that would sacrifice clarity.
+// Do not use in production, if timing attacks are a concern!
+fn compute_p_i_coefficients(i: usize, a: &[Scalar], l: usize, initial_mask: usize) -> Vec<Scalar> {
+    let mut mask = initial_mask;
+    let n = a.len();
+
+    let mut coefficients = vec![Scalar::ZERO; n + 1];
+    coefficients[0] = Scalar::ONE;
+
+    // j represents the index of the currently considered bit of i and l.
+    // E.g. i = 4 has the binary representation 100, and so i_j for j = 0,...,2 represents:
+    // i_0 = 1, i_1 = 0, i_2 = 0.
+    // In the paper, bits are 1-indexed, rather than 0-indexed.
+    for j in 0..n {
+        let i_j = (i & mask) != 0;
+        let l_j = (l & mask) != 0;
+        mask >>= 1;
+
+        let a_j = if i_j { a[j] } else { -a[j] };
+
+        if i_j == l_j {
+            scale_and_raise_polynomial(&mut coefficients, a_j, j);
+        } else {
+            scale_polynomial(&mut coefficients, a_j, j);
+        }
+    }
+
+    coefficients
+}
+
+fn get_random_scalars<R: RngCore>(rng: &mut R, count: usize) -> ProverScalars {
+    let mut r = Vec::with_capacity(count);
+    let mut a = Vec::with_capacity(count);
+    let mut s = Vec::with_capacity(count);
+    let mut t = Vec::with_capacity(count);
+    let mut rho = Vec::with_capacity(count);
+
+    for _ in 0..count {
+        r.push(Scalar::random(&mut *rng));
+        a.push(Scalar::random(&mut *rng));
+        s.push(Scalar::random(&mut *rng));
+        t.push(Scalar::random(&mut *rng));
+        rho.push(Scalar::random(&mut *rng));
+    }
+
+    ProverScalars { r, a, s, t, rho }
 }
 
 fn compute_full_commitments<R: RngCore>(
@@ -42,51 +111,14 @@ fn compute_full_commitments<R: RngCore>(
     let n = params.n;
     let cap = params.cap;
 
-    let mut r = Vec::with_capacity(n);
-    let mut a = Vec::with_capacity(n);
-    let mut s = Vec::with_capacity(n);
-    let mut t = Vec::with_capacity(n);
-    let mut rho = Vec::with_capacity(n);
+    let scalars = get_random_scalars(rng, n);
+    let ProverScalars { r, a, s, t, rho } = &scalars;
 
-    for _ in 0..n {
-        r.push(Scalar::random(&mut *rng));
-        a.push(Scalar::random(&mut *rng));
-        s.push(Scalar::random(&mut *rng));
-        t.push(Scalar::random(&mut *rng));
-        rho.push(Scalar::random(&mut *rng));
-    }
+    let initial_mask = 1 << (n - 1);
 
-    let mut l = Vec::with_capacity(n);
     let mut p_coefficients = Vec::with_capacity(cap);
-
-    let mask_start = 1 << (n - 1);
     for i in 0..cap {
-        let mut mask = mask_start;
-
-        let mut coefficients = vec![Scalar::ZERO; n + 1];
-        coefficients[0] = Scalar::ONE;
-
-        // j represents the index of the currently considered bit of i and l.
-        // E.g. i = 4 has the binary representation 100, and so i_j for j = 0,...,2 represents:
-        // i_0 = 1, i_1 = 0, i_2 = 0.
-        // In the paper, bits are 1-indexed, rather than 0-indexed.
-        for j in 0..n {
-            let i_j = (i & mask) != 0;
-            let l_j = (witness.l & mask) != 0;
-
-            l.push(if l_j { Scalar::ONE } else { Scalar::ZERO });
-
-            mask >>= 1;
-
-            let a_j = if i_j { a[j] } else { -a[j] };
-
-            if i_j == l_j {
-                scale_and_raise_polynomial(&mut coefficients, a_j, j);
-            } else {
-                scale_polynomial(&mut coefficients, a_j, j);
-            }
-        }
-        p_coefficients.push(coefficients);
+        p_coefficients.push(compute_p_i_coefficients(i, &a, witness.l, initial_mask));
     }
 
     let mut c_l = Vec::with_capacity(n);
@@ -94,6 +126,7 @@ fn compute_full_commitments<R: RngCore>(
     let mut c_b = Vec::with_capacity(n);
     let mut c_d = Vec::with_capacity(n);
 
+    let l = vector_from_l_bits(witness.l, n);
     for j in 0..n {
         let k = j;
 
@@ -102,15 +135,76 @@ fn compute_full_commitments<R: RngCore>(
             prod += commitments[i] * p_coefficients[i][k];
         }
 
-        c_l.push(commit(ck, l[j], r[j]));
-        c_a.push(commit(ck, a[j], s[j]));
-        c_b.push(commit(ck, l[j] * a[j], t[j]));
-        c_d.push(prod + commit(ck, Scalar::ZERO, rho[k]));
+        let c_l_j = commit(ck, l[j], r[j]);
+        let c_a_j = commit(ck, a[j], s[j]);
+        let c_b_j = commit(ck, l[j] * a[j], t[j]);
+        let c_d_k = prod + commit(ck, Scalar::ZERO, rho[k]);
+
+        c_l.push(c_l_j);
+        c_a.push(c_a_j);
+        c_b.push(c_b_j);
+        c_d.push(c_d_k);
     }
 
     (
         ProofCommitment { c_l, c_a, c_b, c_d },
-        ProverMemory { r, a, s, t, rho, l },
+        ProverMemory { scalars, l },
+    )
+}
+
+fn compute_fast_commitments<R: RngCore>(
+    rng: &mut R,
+    ck: ProjectivePoint,
+    messages: &[Scalar],
+    params: &Parameters,
+    witness: &Witness,
+) -> (ProofCommitment, ProverMemory) {
+    let n = params.n;
+    let cap = params.cap;
+
+    let scalars = get_random_scalars(rng, n);
+    let ProverScalars { r, a, s, t, rho } = &scalars;
+
+    let mut p_coefficients = Vec::with_capacity(cap);
+    let mut d = vec![Scalar::ZERO; n];
+
+    let initial_mask = 1 << (n - 1);
+    for i in 0..cap {
+        p_coefficients.push(compute_p_i_coefficients(i, &a, witness.l, initial_mask));
+
+        for k in 0..n {
+            // so m_i = lambda_l - lambda_i = 0 - lambda_i = -lambda_i
+            let m_i = -messages[i];
+            d[k] += m_i * p_coefficients[i][k];
+        }
+    }
+
+    let mut c_l = Vec::with_capacity(n);
+    let mut c_a = Vec::with_capacity(n);
+    let mut c_b = Vec::with_capacity(n);
+    let mut c_d = Vec::with_capacity(n);
+
+    let l = vector_from_l_bits(witness.l, n);
+    for j in 0..n {
+        let k = j;
+
+        let c_l_j = commit(ck, l[j], r[j]);
+        let c_a_j = commit(ck, a[j], s[j]);
+        let c_b_j = commit(ck, l[j] * a[j], t[j]);
+
+        // Since all commitments have the same randomness, phi(x) = 0 and so phi_k = 0 for all k.
+        // It follows that c_d_k = Com_ck(d_k, rho_k).
+        let c_d_k = commit(ck, d[k], rho[k]);
+
+        c_l.push(c_l_j);
+        c_a.push(c_a_j);
+        c_b.push(c_b_j);
+        c_d.push(c_d_k);
+    }
+
+    (
+        ProofCommitment { c_l, c_a, c_b, c_d },
+        ProverMemory { scalars, l },
     )
 }
 
@@ -123,7 +217,8 @@ fn compute_response(
     let n = params.n;
     let x = challenge;
 
-    let ProverMemory { r, a, s, t, rho, l } = memory;
+    let ProverMemory { scalars, l } = memory;
+    let ProverScalars { r, a, s, t, rho } = &scalars;
 
     let mut f = Vec::with_capacity(n);
     let mut z_a = Vec::with_capacity(n);
@@ -161,6 +256,25 @@ pub fn ni_prove_commitment_to_0<R: RngCore>(
 ) -> Transcript {
     let (proof_commitments, memory) =
         compute_full_commitments(rng, ck, &commitments, &params, &witness);
+    let challenge = compute_challenge(ck, &commitments, &proof_commitments);
+    let response = compute_response(&params, memory, witness, challenge);
+
+    Transcript {
+        commitments: proof_commitments,
+        challenge,
+        response,
+    }
+}
+
+pub fn ni_prove_membership<R: RngCore>(
+    rng: &mut R,
+    ck: ProjectivePoint,
+    commitments: &[ProjectivePoint],
+    values: &[Scalar],
+    params: &Parameters,
+    witness: Witness,
+) -> Transcript {
+    let (proof_commitments, memory) = compute_fast_commitments(rng, ck, &values, &params, &witness);
     let challenge = compute_challenge(ck, &commitments, &proof_commitments);
     let response = compute_response(&params, memory, witness, challenge);
 

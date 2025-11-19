@@ -8,8 +8,8 @@ mod prover;
 mod verifier;
 
 use crate::proof::Witness;
-use crate::prover::ni_prove_commitment_to_0;
-use crate::verifier::verify;
+use crate::prover::{ni_prove_commitment_to_0, ni_prove_membership};
+use crate::verifier::{verify_commitment_to_0, verify_membership};
 
 fn commit(ck: ProjectivePoint, message: Scalar, r: Scalar) -> ProjectivePoint {
     (ProjectivePoint::GENERATOR * message) + (ck * r)
@@ -52,19 +52,39 @@ fn main() {
     let secret = Scalar::random(&mut rng);
     let pk = ProjectivePoint::GENERATOR * secret;
 
-    let mut commitments = Vec::with_capacity(messages.len());
-    for message in &messages {
-        commitments.push(commit(pk, *message, Scalar::random(&mut rng)));
-    }
+    let membership_proof = true;
 
     let l = 3;
     let r = Scalar::random(&mut rng);
     let witness = Witness { l, r };
 
-    messages[l] = Scalar::ZERO;
-    commitments[l] = commit(pk, messages[l], r);
-    assert_eq!(commitments[l], commit(pk, Scalar::ZERO, r));
+    if !membership_proof {
+        messages[l] = Scalar::ZERO; // NB! variable time
+    }
+    let commitment = commit(pk, messages[l], r); // NB! variable time
 
-    let transcript = ni_prove_commitment_to_0(&mut rng, pk, &commitments, &parameters, witness);
-    verify(pk, &commitments, &parameters, &transcript);
+    let mut commitments = Vec::with_capacity(messages.len());
+    for message in &messages {
+        let c_i = if membership_proof {
+            commitment + commit(pk, -(*message), Scalar::ZERO)
+        } else {
+            commit(pk, *message, Scalar::random(&mut rng))
+        };
+
+        commitments.push(c_i);
+    }
+
+    commitments[l] = commitment; // NB! variable time
+
+    let transcript = if membership_proof {
+        ni_prove_membership(&mut rng, pk, &commitments, &messages, &parameters, witness)
+    } else {
+        ni_prove_commitment_to_0(&mut rng, pk, &commitments, &parameters, witness)
+    };
+
+    if membership_proof {
+        verify_membership(pk, &messages, commitment, &parameters, &transcript);
+    } else {
+        verify_commitment_to_0(pk, &commitments, &parameters, &transcript);
+    }
 }

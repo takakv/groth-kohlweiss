@@ -4,6 +4,7 @@ pub(crate) struct Witness {
     pub(crate) l: usize,
     pub(crate) r: Scalar,
 }
+
 pub struct ProofCommitment {
     pub c_l: Vec<ProjectivePoint>,
     pub c_a: Vec<ProjectivePoint>,

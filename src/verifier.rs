@@ -1,20 +1,46 @@
-use crate::proof::{ProofCommitment, ProofResponse, Transcript};
-use crate::{commit, Parameters};
 use p384::{ProjectivePoint, Scalar};
 
-pub fn verify(
-    ck: ProjectivePoint,
-    commitments: &[ProjectivePoint],
-    params: &Parameters,
-    transcript: &Transcript,
-) {
-    let n = params.n;
-    let cap = params.cap;
+use crate::proof::Transcript;
+use crate::{commit, Parameters};
 
-    let ProofCommitment { c_l, c_a, c_b, c_d } = &transcript.commitments;
+fn compute_f_ji_product(f: &[Scalar], x: Scalar, i: usize, initial_mask: usize) -> Scalar {
+    let mut result = Scalar::ONE;
+
+    let mut mask = initial_mask;
+    for f_j in f {
+        result *= if (i & mask) != 0 { *f_j } else { x - f_j };
+        mask >>= 1;
+    }
+
+    result
+}
+
+fn compute_c_d_product(c_d: &[ProjectivePoint], x: Scalar) -> (ProjectivePoint, Scalar) {
+    let mut result = ProjectivePoint::IDENTITY;
+    let mut x_neg_exp = -Scalar::ONE;
+
+    for c_d_k in c_d {
+        result += c_d_k * &x_neg_exp;
+        x_neg_exp *= x;
+    }
+
+    (result, -x_neg_exp)
+}
+
+fn verify_loop(ck: ProjectivePoint, parameters: &Parameters, transcript: &Transcript) {
+    let commitments = &transcript.commitments;
     let x = transcript.challenge;
-    let ProofResponse { f, z_a, z_b, z_d } = &transcript.response;
+    let response = &transcript.response;
 
+    let c_l = &commitments.c_l;
+    let c_a = &commitments.c_a;
+    let c_b = &commitments.c_b;
+
+    let f = &response.f;
+    let z_a = &response.z_a;
+    let z_b = &response.z_b;
+
+    let n = parameters.n;
     for j in 0..n {
         let c_l_j = c_l[j];
 
@@ -26,32 +52,71 @@ pub fn verify(
         let rhs = commit(ck, Scalar::ZERO, z_b[j]);
         println!("check 2 eq {:?}", lhs.eq(&rhs));
     }
+}
 
+pub fn verify_commitment_to_0(
+    ck: ProjectivePoint,
+    commitments: &[ProjectivePoint],
+    params: &Parameters,
+    transcript: &Transcript,
+) {
+    let n = params.n;
+    let cap = params.cap;
+
+    let c_d = &transcript.commitments.c_d;
+    let x = transcript.challenge;
+    let f = &transcript.response.f;
+    let z_d = transcript.response.z_d;
+
+    verify_loop(ck, params, transcript);
+
+    let (prod_c_d, _) = compute_c_d_product(c_d, x);
     let mut prod_c_i = ProjectivePoint::IDENTITY;
 
     let mask_start = 1 << (n - 1);
     for i in 0..cap {
-        let mut prod_f_j = Scalar::ONE;
-
-        let mut mask = mask_start;
-        for j in 0..n {
-            prod_f_j *= if (i & mask) != 0 { f[j] } else { x - f[j] };
-            mask >>= 1;
-        }
-
+        let prod_f_j = compute_f_ji_product(f, x, i, mask_start);
         prod_c_i += commitments[i] * prod_f_j;
     }
 
-    let mut prod_c_d = -c_d[0];
-    let mut x_neg_exp = -x;
+    let lhs = prod_c_i + prod_c_d;
+    let rhs = commit(ck, Scalar::ZERO, z_d);
 
-    for k in 1..n {
-        prod_c_d += c_d[k] * (x_neg_exp);
-        x_neg_exp *= x;
+    println!("Check final eq {:?}", lhs.eq(&rhs));
+}
+
+pub fn verify_membership(
+    ck: ProjectivePoint,
+    values: &[Scalar],
+    commitment: ProjectivePoint,
+    params: &Parameters,
+    transcript: &Transcript,
+) {
+    let n = params.n;
+    let cap = params.cap;
+
+    let c_d = &transcript.commitments.c_d;
+    let x = transcript.challenge;
+    let f = &transcript.response.f;
+    let z_d = transcript.response.z_d;
+
+    verify_loop(ck, params, transcript);
+
+    let (prod_c_d, x_exp_n) = compute_c_d_product(c_d, x);
+
+    let lambda = values;
+    let mut sum_lambda_p = Scalar::ZERO;
+
+    let mask_start = 1 << (n - 1);
+    for i in 0..cap {
+        let prod_f_j = compute_f_ji_product(f, x, i, mask_start);
+        sum_lambda_p += lambda[i] * prod_f_j;
     }
 
+    let prod_c_i = (commitment * x_exp_n) + commit(ck, -sum_lambda_p, Scalar::ZERO);
+
     let lhs = prod_c_i + prod_c_d;
-    let rhs = commit(ck, Scalar::ZERO, *z_d);
+    let rhs = commit(ck, Scalar::ZERO, z_d);
 
     println!("Check final eq {:?}", lhs.eq(&rhs));
 }
