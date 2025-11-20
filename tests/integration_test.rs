@@ -8,6 +8,7 @@ use p384::{ProjectivePoint, Scalar};
 
 fn prepare_commitments(
     membership_proof: bool,
+    commit_to_zero: bool,
 ) -> (
     ProjectivePoint,
     Vec<ProjectivePoint>,
@@ -38,7 +39,7 @@ fn prepare_commitments(
     let secret = Scalar::from_u64(9876543210).cube();
     let pk = ProjectivePoint::GENERATOR * secret;
 
-    if !membership_proof {
+    if !membership_proof || commit_to_zero {
         messages[l] = Scalar::ZERO;
     }
     let commitment = commit(pk, messages[l], r);
@@ -59,9 +60,26 @@ fn prepare_commitments(
     (pk, commitments, messages, parameters, witness)
 }
 
+fn prepare_membership_commitment(
+    to_zero: bool,
+) -> (
+    ProjectivePoint,
+    Vec<ProjectivePoint>,
+    Vec<Scalar>,
+    Parameters,
+    Witness,
+) {
+    prepare_commitments(true, to_zero)
+}
+
+fn prepare_commitment_to_0() -> (ProjectivePoint, Vec<ProjectivePoint>, Parameters, Witness) {
+    let (pk, commitments, _, parameters, witness) = prepare_commitments(false, false);
+    (pk, commitments, parameters, witness)
+}
+
 #[test]
 fn commitment_to_0_verifies() {
-    let (pk, commitments, _, parameters, witness) = prepare_commitments(false);
+    let (pk, commitments, parameters, witness) = prepare_commitment_to_0();
 
     let transcript = ni_prove_commitment_to_0(&mut OsRng, pk, &commitments, &parameters, &witness);
     verify_commitment_to_0(pk, &commitments, &parameters, &transcript);
@@ -70,7 +88,7 @@ fn commitment_to_0_verifies() {
 #[test]
 #[should_panic]
 fn commitment_to_0_fails() {
-    let (pk, commitments, _, parameters, witness) = prepare_commitments(false);
+    let (pk, commitments, parameters, witness) = prepare_commitment_to_0();
 
     let transcript = ni_prove_commitment_to_0(&mut OsRng, pk, &commitments, &parameters, &witness);
 
@@ -82,7 +100,7 @@ fn commitment_to_0_fails() {
 
 #[test]
 fn membership_proof_verifies() {
-    let (pk, commitments, messages, parameters, witness) = prepare_commitments(false);
+    let (pk, commitments, messages, parameters, witness) = prepare_membership_commitment(false);
     let commitment = commitments[witness.l];
 
     let transcript = ni_prove_membership(
@@ -99,7 +117,7 @@ fn membership_proof_verifies() {
 #[test]
 #[should_panic]
 fn membership_proof_fails() {
-    let (pk, commitments, messages, parameters, witness) = prepare_commitments(false);
+    let (pk, commitments, messages, parameters, witness) = prepare_membership_commitment(false);
     let commitment = commitments[witness.l - 1];
 
     let transcript = ni_prove_membership(
@@ -113,18 +131,17 @@ fn membership_proof_fails() {
     verify_membership(pk, &messages, commitment, &parameters, &transcript);
 }
 
-// #[test]
-// fn membership_proof_verifies_raw() {
-//     let (pk, commitments, messages, parameters, witness) = prepare_commitments(false);
-//     let commitment = commitments[witness.l];
-//
-//     let transcript = ni_prove_membership(
-//         &mut OsRng,
-//         pk,
-//         &commitments,
-//         &messages,
-//         &parameters,
-//         &witness,
-//     );
-//     verify_commitment_to_0(pk, &commitments, &parameters, &transcript);
-// }
+#[test]
+fn membership_proof_verifies_for_0() {
+    let (pk, commitments, messages, parameters, witness) = prepare_membership_commitment(true);
+
+    let transcript = ni_prove_membership(
+        &mut OsRng,
+        pk,
+        &commitments,
+        &messages,
+        &parameters,
+        &witness,
+    );
+    verify_commitment_to_0(pk, &commitments, &parameters, &transcript);
+}
