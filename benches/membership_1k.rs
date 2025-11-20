@@ -35,7 +35,8 @@ fn prepare_commitments<R: RngCore>(
         messages.extend(pad);
     }
 
-    let l = 3;
+    // let l = rng.next_u32() as usize % cap; // Bias does not matter here
+    let l = 983;
     let r = Scalar::random(&mut *rng);
     let witness = Witness { l, r };
 
@@ -58,6 +59,8 @@ fn criterion_benchmark(c: &mut Criterion) {
 
     let (pk, commitments, messages, parameters, witness) = prepare_commitments(&mut rng);
     let commitment = commitments[witness.l];
+
+    println!("Commitment index: {:}", witness.l);
 
     let mut last_result = None;
 

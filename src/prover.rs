@@ -206,17 +206,16 @@ fn compute_fast_commitments<R: RngCore>(
     let scalars = get_random_scalars(rng, n);
     let ProverScalars { r, a, s, t, rho } = &scalars;
 
-    let mut p_coefficients = Vec::with_capacity(cap);
     let mut d = vec![Scalar::ZERO; n];
 
     let initial_mask = 1 << (n - 1);
     for i in 0..cap {
-        p_coefficients.push(compute_p_i_coefficients(i, &a, witness.l, initial_mask));
+        // lambda_l = 0, so m_i = lambda_l - lambda_i = 0 - lambda_i = -lambda_i
+        let m_i = -messages[i];
+        let p_i_coefficients = compute_p_i_coefficients(i, &a, witness.l, initial_mask);
 
         for k in 0..n {
-            // so m_i = lambda_l - lambda_i = 0 - lambda_i = -lambda_i
-            let m_i = -messages[i];
-            d[k] += m_i * p_coefficients[i][k];
+            d[k] += m_i * p_i_coefficients[k];
         }
     }
 
@@ -323,5 +322,78 @@ pub fn ni_prove_membership<R: RngCore>(
         commitments: proof_commitments,
         challenge,
         response,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crypto_bigint::rand_core::OsRng;
+
+    fn get_scalars(count: usize) -> Vec<Scalar> {
+        let mut scalars = Vec::with_capacity(count);
+        for _ in 0..count {
+            scalars.push(Scalar::random(OsRng))
+        }
+
+        scalars
+    }
+
+    #[test]
+    fn var_const_coefficients_match() {
+        let n = 10;
+        let cap = 2usize.pow(n as u32);
+
+        let a = get_scalars(n);
+
+        let initial_mask = 1 << (n - 1);
+        let secret_index = 13;
+
+        for i in 0..cap {
+            let const_coefficients = compute_p_i_coefficients(i, &a, secret_index, initial_mask);
+            let var_coefficients =
+                compute_p_i_coefficients_vartime(i, &a, secret_index, initial_mask);
+
+            for j in 0..n {
+                assert_eq!(const_coefficients[j], var_coefficients[j]);
+            }
+        }
+    }
+
+    #[test]
+    fn p_coefficients_correctness() {
+        let n = 10;
+        let cap = 2usize.pow(n as u32);
+
+        let a = get_scalars(n);
+
+        let initial_mask = 1 << (n - 1);
+        let secret_index = 13;
+
+        let x = Scalar::from_u64(987654321).cube();
+        let mut powers_of_x = vec![Scalar::ONE; n + 1];
+        for k in 1..=n {
+            powers_of_x[k] = powers_of_x[k - 1] * x;
+        }
+
+        let l = vector_from_l_bits(secret_index, n);
+        for i in 0..cap {
+            let coefficients = compute_p_i_coefficients_vartime(i, &a, secret_index, initial_mask);
+            let mut mask = initial_mask;
+
+            let mut sum = Scalar::ZERO;
+            for k in 0..=n {
+                sum += coefficients[k] * powers_of_x[k];
+            }
+
+            let mut prod = Scalar::ONE;
+            for j in 0..n {
+                let f_j = (l[j] * x) + a[j];
+                prod *= if (i & mask) != 0 { f_j } else { x - f_j };
+                mask >>= 1;
+            }
+
+            assert_eq!(sum, prod);
+        }
     }
 }
