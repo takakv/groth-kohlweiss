@@ -25,7 +25,7 @@ pub struct ProofResponse {
 }
 
 pub struct Transcript {
-    pub commitments: ProofCommitment,
+    pub commitment: ProofCommitment,
     pub challenge: Scalar,
     pub response: ProofResponse,
 }

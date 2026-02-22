@@ -3,6 +3,13 @@ use p384::{ProjectivePoint, Scalar};
 use crate::crypto::commit;
 use crate::proof::{Parameters, Transcript};
 
+#[derive(Debug)]
+pub enum VerificationError {
+    InconsistentTranscript,
+    LoopCheckFailed,
+    ProductCheckFailed,
+}
+
 fn compute_f_j_ij_product(f: &[Scalar], x: Scalar, i: usize) -> Scalar {
     let mut result = Scalar::ONE;
     let mut mask = 1;
@@ -27,8 +34,34 @@ fn compute_c_d_product(c_d: &[ProjectivePoint], x: Scalar) -> (ProjectivePoint, 
     (result, -x_neg_exp)
 }
 
-fn verify_loop(ck: ProjectivePoint, parameters: &Parameters, transcript: &Transcript) -> bool {
-    let commitments = &transcript.commitments;
+fn all_equal_to(n: usize, lengths: &[usize]) -> bool {
+    lengths.iter().all(|&len| len == n)
+}
+
+fn validate_transcript_structure(
+    params: &Parameters,
+    transcript: &Transcript,
+) -> Result<(), VerificationError> {
+    if !all_equal_to(
+        params.n,
+        &[
+            transcript.commitment.c_l.len(),
+            transcript.commitment.c_a.len(),
+            transcript.commitment.c_b.len(),
+            transcript.commitment.c_d.len(),
+            transcript.response.f.len(),
+            transcript.response.z_a.len(),
+            transcript.response.z_b.len(),
+        ],
+    ) {
+        return Err(VerificationError::InconsistentTranscript);
+    }
+
+    Ok(())
+}
+
+fn verify_loop(ck: ProjectivePoint, transcript: &Transcript) -> bool {
+    let commitments = &transcript.commitment;
     let x = transcript.challenge;
     let response = &transcript.response;
 
@@ -40,19 +73,18 @@ fn verify_loop(ck: ProjectivePoint, parameters: &Parameters, transcript: &Transc
     let z_a = &response.z_a;
     let z_b = &response.z_b;
 
-    let n = parameters.n;
-    for j in 0..n {
+    for j in 0..f.len() {
         let c_l_j = c_l[j];
 
         let lhs = (c_l_j * x) + c_a[j];
         let rhs = commit(ck, f[j], z_a[j]);
-        if lhs.ne(&rhs) {
+        if lhs != rhs {
             return false;
         }
 
         let lhs = (c_l_j * (x - f[j])) + c_b[j];
         let rhs = commit(ck, Scalar::ZERO, z_b[j]);
-        if lhs.ne(&rhs) {
+        if lhs != rhs {
             return false;
         }
     }
@@ -65,15 +97,17 @@ pub fn verify_commitment_to_0(
     commitments: &[ProjectivePoint],
     params: &Parameters,
     transcript: &Transcript,
-) {
-    let c_d = &transcript.commitments.c_d;
+) -> Result<(), VerificationError> {
+    validate_transcript_structure(params, transcript)?;
+
+    if !verify_loop(ck, transcript) {
+        return Err(VerificationError::LoopCheckFailed);
+    }
+
+    let c_d = &transcript.commitment.c_d;
     let x = transcript.challenge;
     let f = &transcript.response.f;
     let z_d = transcript.response.z_d;
-
-    if !verify_loop(ck, params, transcript) {
-        panic!("Proof loop checks failed")
-    }
 
     let (prod_c_d, _) = compute_c_d_product(c_d, x);
     let mut prod_c_i = ProjectivePoint::IDENTITY;
@@ -86,9 +120,11 @@ pub fn verify_commitment_to_0(
     let lhs = prod_c_i + prod_c_d;
     let rhs = commit(ck, Scalar::ZERO, z_d);
 
-    if lhs.ne(&rhs) {
-        panic!("Proof final check failed")
+    if lhs != rhs {
+        return Err(VerificationError::ProductCheckFailed);
     }
+
+    Ok(())
 }
 
 pub fn verify_membership(
@@ -97,15 +133,17 @@ pub fn verify_membership(
     commitment: ProjectivePoint,
     params: &Parameters,
     transcript: &Transcript,
-) {
-    let c_d = &transcript.commitments.c_d;
+) -> Result<(), VerificationError> {
+    validate_transcript_structure(params, transcript)?;
+
+    if !verify_loop(ck, transcript) {
+        return Err(VerificationError::LoopCheckFailed);
+    }
+
+    let c_d = &transcript.commitment.c_d;
     let x = transcript.challenge;
     let f = &transcript.response.f;
     let z_d = transcript.response.z_d;
-
-    if !verify_loop(ck, params, transcript) {
-        panic!("Proof loop checks failed")
-    }
 
     let (prod_c_d, x_exp_n) = compute_c_d_product(c_d, x);
 
@@ -122,7 +160,9 @@ pub fn verify_membership(
     let lhs = prod_c_i + prod_c_d;
     let rhs = commit(ck, Scalar::ZERO, z_d);
 
-    if lhs.ne(&rhs) {
-        panic!("Proof final check failed")
+    if lhs != rhs {
+        return Err(VerificationError::ProductCheckFailed);
     }
+
+    Ok(())
 }

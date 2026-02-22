@@ -2,7 +2,7 @@ use crypto_bigint::rand_core::OsRng;
 use groth_kohlweiss::crypto::{commit, message_to_scalar};
 use groth_kohlweiss::proof::{Parameters, Witness};
 use groth_kohlweiss::prover::{ni_prove_commitment_to_0, ni_prove_membership};
-use groth_kohlweiss::verifier::{verify_commitment_to_0, verify_membership};
+use groth_kohlweiss::verifier::{verify_commitment_to_0, verify_membership, VerificationError};
 use p384::elliptic_curve::Field;
 use p384::{ProjectivePoint, Scalar};
 
@@ -82,11 +82,11 @@ fn commitment_to_0_verifies() {
     let (pk, commitments, parameters, witness) = prepare_commitment_to_0();
 
     let transcript = ni_prove_commitment_to_0(&mut OsRng, pk, &commitments, &parameters, &witness);
-    verify_commitment_to_0(pk, &commitments, &parameters, &transcript);
+    verify_commitment_to_0(pk, &commitments, &parameters, &transcript)
+        .expect("verification should succeed");
 }
 
 #[test]
-#[should_panic]
 fn commitment_to_0_fails() {
     let (pk, commitments, parameters, witness) = prepare_commitment_to_0();
 
@@ -95,7 +95,8 @@ fn commitment_to_0_fails() {
     let mut reversed = commitments;
     reversed.reverse();
 
-    verify_commitment_to_0(pk, &reversed, &parameters, &transcript);
+    let result = verify_commitment_to_0(pk, &reversed, &parameters, &transcript);
+    assert!(matches!(result, Err(VerificationError::ProductCheckFailed)));
 }
 
 #[test]
@@ -111,11 +112,11 @@ fn membership_proof_verifies() {
         &parameters,
         &witness,
     );
-    verify_membership(pk, &messages, commitment, &parameters, &transcript);
+    verify_membership(pk, &messages, commitment, &parameters, &transcript)
+        .expect("verification should succeed");
 }
 
 #[test]
-#[should_panic]
 fn membership_proof_fails() {
     let (pk, commitments, messages, parameters, witness) = prepare_membership_commitment(false);
     let commitment = commitments[witness.l - 1];
@@ -128,7 +129,8 @@ fn membership_proof_fails() {
         &parameters,
         &witness,
     );
-    verify_membership(pk, &messages, commitment, &parameters, &transcript);
+    let result = verify_membership(pk, &messages, commitment, &parameters, &transcript);
+    assert!(matches!(result, Err(VerificationError::ProductCheckFailed)));
 }
 
 #[test]
@@ -143,5 +145,6 @@ fn membership_proof_verifies_for_0() {
         &parameters,
         &witness,
     );
-    verify_commitment_to_0(pk, &commitments, &parameters, &transcript);
+    verify_commitment_to_0(pk, &commitments, &parameters, &transcript)
+        .expect("verification should succeed");
 }

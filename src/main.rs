@@ -64,8 +64,10 @@ fn main() {
     };
 
     if membership_proof {
-        verify_membership(pk, &messages, commitment, &parameters, &transcript);
+        verify_membership(pk, &messages, commitment, &parameters, &transcript)
+            .expect("Verification failed");
     } else {
-        verify_commitment_to_0(pk, &commitments, &parameters, &transcript);
+        verify_commitment_to_0(pk, &commitments, &parameters, &transcript)
+            .expect("Verification failed");
     }
 }

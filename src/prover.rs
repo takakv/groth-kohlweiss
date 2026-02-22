@@ -91,11 +91,7 @@ fn compute_p_i_coefficients(i: usize, a: &[Scalar], l: usize) -> Vec<Scalar> {
 
 // NB! This is not constant time, but might be easier to reason about and slightly faster.
 #[allow(dead_code)]
-fn compute_p_i_coefficients_vartime(
-    i: usize,
-    a: &[Scalar],
-    l: usize,
-) -> Vec<Scalar> {
+fn compute_p_i_coefficients_vartime(i: usize, a: &[Scalar], l: usize) -> Vec<Scalar> {
     let n = a.len();
     let mut mask = 1;
 
@@ -290,13 +286,13 @@ pub fn ni_prove_commitment_to_0<R: RngCore>(
     params: &Parameters,
     witness: &Witness,
 ) -> Transcript {
-    let (proof_commitments, memory) =
+    let (proof_commitment, memory) =
         compute_full_commitments(rng, ck, &commitments, &params, &witness);
-    let challenge = compute_challenge(ck, &commitments, &proof_commitments);
+    let challenge = compute_challenge(ck, &commitments, &proof_commitment);
     let response = compute_response(&params, memory, witness, challenge);
 
     Transcript {
-        commitments: proof_commitments,
+        commitment: proof_commitment,
         challenge,
         response,
     }
@@ -310,12 +306,12 @@ pub fn ni_prove_membership<R: RngCore>(
     params: &Parameters,
     witness: &Witness,
 ) -> Transcript {
-    let (proof_commitments, memory) = compute_fast_commitments(rng, ck, &values, &params, &witness);
-    let challenge = compute_challenge(ck, &commitments, &proof_commitments);
+    let (proof_commitment, memory) = compute_fast_commitments(rng, ck, &values, &params, &witness);
+    let challenge = compute_challenge(ck, &commitments, &proof_commitment);
     let response = compute_response(&params, memory, witness, challenge);
 
     Transcript {
-        commitments: proof_commitments,
+        commitment: proof_commitment,
         challenge,
         response,
     }
@@ -346,8 +342,7 @@ mod tests {
 
         for i in 0..cap {
             let const_coefficients = compute_p_i_coefficients(i, &a, secret_index);
-            let var_coefficients =
-                compute_p_i_coefficients_vartime(i, &a, secret_index);
+            let var_coefficients = compute_p_i_coefficients_vartime(i, &a, secret_index);
 
             for j in 0..n {
                 assert_eq!(const_coefficients[j], var_coefficients[j]);
