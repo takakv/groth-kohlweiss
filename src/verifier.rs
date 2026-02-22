@@ -3,13 +3,13 @@ use p384::{ProjectivePoint, Scalar};
 use crate::crypto::commit;
 use crate::proof::{Parameters, Transcript};
 
-fn compute_f_ji_product(f: &[Scalar], x: Scalar, i: usize, initial_mask: usize) -> Scalar {
+fn compute_f_j_ij_product(f: &[Scalar], x: Scalar, i: usize) -> Scalar {
     let mut result = Scalar::ONE;
+    let mut mask = 1;
 
-    let mut mask = initial_mask;
     for f_j in f {
         result *= if (i & mask) != 0 { *f_j } else { x - f_j };
-        mask >>= 1;
+        mask <<= 1;
     }
 
     result
@@ -66,9 +66,6 @@ pub fn verify_commitment_to_0(
     params: &Parameters,
     transcript: &Transcript,
 ) {
-    let n = params.n;
-    let cap = params.cap;
-
     let c_d = &transcript.commitments.c_d;
     let x = transcript.challenge;
     let f = &transcript.response.f;
@@ -81,9 +78,8 @@ pub fn verify_commitment_to_0(
     let (prod_c_d, _) = compute_c_d_product(c_d, x);
     let mut prod_c_i = ProjectivePoint::IDENTITY;
 
-    let mask_start = 1 << (n - 1);
-    for i in 0..cap {
-        let prod_f_j = compute_f_ji_product(f, x, i, mask_start);
+    for i in 0..params.cap {
+        let prod_f_j = compute_f_j_ij_product(f, x, i);
         prod_c_i += commitments[i] * prod_f_j;
     }
 
@@ -97,14 +93,11 @@ pub fn verify_commitment_to_0(
 
 pub fn verify_membership(
     ck: ProjectivePoint,
-    values: &[Scalar],
+    allowed_values: &[Scalar],
     commitment: ProjectivePoint,
     params: &Parameters,
     transcript: &Transcript,
 ) {
-    let n = params.n;
-    let cap = params.cap;
-
     let c_d = &transcript.commitments.c_d;
     let x = transcript.challenge;
     let f = &transcript.response.f;
@@ -116,12 +109,11 @@ pub fn verify_membership(
 
     let (prod_c_d, x_exp_n) = compute_c_d_product(c_d, x);
 
-    let lambda = values;
+    let lambda = allowed_values;
     let mut sum_lambda_p = Scalar::ZERO;
 
-    let mask_start = 1 << (n - 1);
-    for i in 0..cap {
-        let prod_f_j = compute_f_ji_product(f, x, i, mask_start);
+    for i in 0..params.cap {
+        let prod_f_j = compute_f_j_ij_product(f, x, i);
         sum_lambda_p += lambda[i] * prod_f_j;
     }
 

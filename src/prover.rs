@@ -40,22 +40,22 @@ fn scale_and_raise_polynomial(coefficients: &mut [Scalar], factor: Scalar, degre
 fn vector_from_l_bits(l: usize, n: usize) -> Vec<Scalar> {
     let mut l_bits = Vec::with_capacity(n);
 
-    let mut mask = 1 << (n - 1);
+    let mut mask = 1;
     for _ in 0..n {
         l_bits.push(Scalar::conditional_select(
             &Scalar::ONE,
             &Scalar::ZERO,
             (l & mask).ct_eq(&0),
         ));
-        mask >>= 1;
+        mask <<= 1;
     }
 
     l_bits
 }
 
-fn compute_p_i_coefficients(i: usize, a: &[Scalar], l: usize, initial_mask: usize) -> Vec<Scalar> {
-    let mut mask = initial_mask;
+fn compute_p_i_coefficients(i: usize, a: &[Scalar], l: usize) -> Vec<Scalar> {
     let n = a.len();
+    let mut mask = 1;
 
     let mut coefficients = vec![Scalar::ZERO; n + 1];
     coefficients[0] = Scalar::ONE;
@@ -67,7 +67,7 @@ fn compute_p_i_coefficients(i: usize, a: &[Scalar], l: usize, initial_mask: usiz
     for j in 0..n {
         let i_j = (i & mask) != 0;
         let l_j = (l & mask).ct_ne(&0);
-        mask >>= 1;
+        mask <<= 1;
 
         let a_j = if i_j { a[j] } else { -a[j] };
         let delta = Scalar::conditional_select(
@@ -95,10 +95,9 @@ fn compute_p_i_coefficients_vartime(
     i: usize,
     a: &[Scalar],
     l: usize,
-    initial_mask: usize,
 ) -> Vec<Scalar> {
-    let mut mask = initial_mask;
     let n = a.len();
+    let mut mask = 1;
 
     let mut coefficients = vec![Scalar::ZERO; n + 1];
     coefficients[0] = Scalar::ONE;
@@ -110,7 +109,7 @@ fn compute_p_i_coefficients_vartime(
     for j in 0..n {
         let i_j = (i & mask) != 0;
         let l_j = (l & mask) != 0;
-        mask >>= 1;
+        mask <<= 1;
 
         let a_j = if i_j { a[j] } else { -a[j] };
 
@@ -155,11 +154,9 @@ fn compute_full_commitments<R: RngCore>(
     let scalars = get_random_scalars(rng, n);
     let ProverScalars { r, a, s, t, rho } = &scalars;
 
-    let initial_mask = 1 << (n - 1);
-
     let mut p_coefficients = Vec::with_capacity(cap);
     for i in 0..cap {
-        p_coefficients.push(compute_p_i_coefficients(i, &a, witness.l, initial_mask));
+        p_coefficients.push(compute_p_i_coefficients(i, &a, witness.l));
     }
 
     let mut c_l = Vec::with_capacity(n);
@@ -208,11 +205,10 @@ fn compute_fast_commitments<R: RngCore>(
 
     let mut d = vec![Scalar::ZERO; n];
 
-    let initial_mask = 1 << (n - 1);
     for i in 0..cap {
         // lambda_l = 0, so m_i = lambda_l - lambda_i = 0 - lambda_i = -lambda_i
         let m_i = -messages[i];
-        let p_i_coefficients = compute_p_i_coefficients(i, &a, witness.l, initial_mask);
+        let p_i_coefficients = compute_p_i_coefficients(i, &a, witness.l);
 
         for k in 0..n {
             d[k] += m_i * p_i_coefficients[k];
@@ -346,13 +342,12 @@ mod tests {
 
         let a = get_scalars(n);
 
-        let initial_mask = 1 << (n - 1);
         let secret_index = 13;
 
         for i in 0..cap {
-            let const_coefficients = compute_p_i_coefficients(i, &a, secret_index, initial_mask);
+            let const_coefficients = compute_p_i_coefficients(i, &a, secret_index);
             let var_coefficients =
-                compute_p_i_coefficients_vartime(i, &a, secret_index, initial_mask);
+                compute_p_i_coefficients_vartime(i, &a, secret_index);
 
             for j in 0..n {
                 assert_eq!(const_coefficients[j], var_coefficients[j]);
@@ -367,7 +362,6 @@ mod tests {
 
         let a = get_scalars(n);
 
-        let initial_mask = 1 << (n - 1);
         let secret_index = 13;
 
         let x = Scalar::from_u64(987654321).cube();
@@ -378,8 +372,7 @@ mod tests {
 
         let l = vector_from_l_bits(secret_index, n);
         for i in 0..cap {
-            let coefficients = compute_p_i_coefficients_vartime(i, &a, secret_index, initial_mask);
-            let mut mask = initial_mask;
+            let coefficients = compute_p_i_coefficients_vartime(i, &a, secret_index);
 
             let mut sum = Scalar::ZERO;
             for k in 0..=n {
@@ -387,10 +380,12 @@ mod tests {
             }
 
             let mut prod = Scalar::ONE;
+            let mut mask = 1;
+
             for j in 0..n {
                 let f_j = (l[j] * x) + a[j];
                 prod *= if (i & mask) != 0 { f_j } else { x - f_j };
-                mask >>= 1;
+                mask <<= 1;
             }
 
             assert_eq!(sum, prod);
